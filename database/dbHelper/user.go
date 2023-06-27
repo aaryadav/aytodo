@@ -1,108 +1,94 @@
 package dbHelper
 
 import (
+	"aytodo/database"
 	"aytodo/models"
-	"log"
+	"aytodo/utils"
+	"database/sql"
 
 	"github.com/jmoiron/sqlx"
 )
 
-func CreateTask(db sqlx.Ext, id, title, description string, completed bool) error {
-	SQL := `INSERT INTO todo(ID, Title, Description, Completed) VALUES ($1,$2,$3,$4)`
-	_, err := db.Query(SQL, id, title, description, completed)
-	log.Println("Added task.")
-	if err != nil {
-		return err
+func IsUserExists(email string) (bool, error) {
+	// language=SQL
+	SQL := `SELECT id FROM users WHERE email = TRIM(LOWER($1)) AND archived_at IS NULL`
+	var id string
+	err := database.Todo.Get(&id, SQL, email)
+	if err != nil && err != sql.ErrNoRows {
+		return false, err
 	}
-	return nil
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return true, nil
 }
-func AllTasks(db sqlx.Ext) ([]models.Task, error) {
-	SQL := `SELECT id, title, description, completed from todo`
-	var tasks []models.Task
-	rows, err := db.Query(SQL)
-	if err != nil {
+
+func CreateUser(db sqlx.Ext, name, email, password string) (string, error) {
+	// language=SQL
+	SQL := `INSERT INTO users(name, email, password) VALUES ($1, TRIM(LOWER($2)), $3) RETURNING id`
+	var userID string
+	if err := db.QueryRowx(SQL, name, email, password).Scan(&userID); err != nil {
+		return "", err
+	}
+	return userID, nil
+}
+
+func CreateUserSession(db sqlx.Ext, userID, sessionToken string) error {
+	// language=SQL
+	SQL := `INSERT INTO user_session(user_id, session_token) VALUES ($1, $2)`
+	_, err := db.Exec(SQL, userID, sessionToken)
+	return err
+}
+
+func GetUserIDByPassword(email, password string) (string, error) {
+	// language=SQL
+	SQL := `SELECT
+				u.id,
+       			u.password
+       		FROM
+				users u
+			WHERE
+				u.archived_at IS NULL
+				AND u.email = TRIM(LOWER($1))`
+	var userID string
+	var passwordHash string
+	err := database.Todo.QueryRowx(SQL, email).Scan(&userID, &passwordHash)
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	// compare password
+	if passwordErr := utils.CheckPassword(password, passwordHash); passwordErr != nil {
+		return "", passwordErr
+	}
+	return userID, nil
+}
+
+func GetUserBySession(sessionToken string) (*models.User, error) {
+	SQL := `SELECT 
+       			u.id, 
+       			u.name, 
+       			u.email, 
+       			u.created_at 
+			FROM users u
+			JOIN user_session us on u.id = us.user_id
+			WHERE u.archived_at IS NULL AND us.session_token = $1`
+	var user models.User
+	err := database.Todo.Get(&user, SQL, sessionToken)
+	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	for rows.Next() {
-		var task models.Task
-
-		err = rows.Scan(&task.ID, &task.Title, &task.Description, &task.Completed, &task.CreatedAt, &task.DueDate)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
+	if err == sql.ErrNoRows {
+		return nil, nil
 	}
-	return tasks, nil
-}
-func OrderedTasks(db sqlx.Ext) ([]models.Task, error) {
-	SQL := `SELECT * FROM todo ORDER BY created_at ASC;`
-	var tasks []models.Task
-	rows, err := db.Query(SQL)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var task models.Task
-
-		err = rows.Scan(&task.ID, &task.Title, &task.Description, &task.Completed, &task.CreatedAt, &task.DueDate)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
-	}
-	return tasks, nil
+	return &user, nil
 }
 
-func OrderedTasksDue(db sqlx.Ext) ([]models.Task, error) {
-	SQL := `SELECT * FROM todo ORDER BY due_date DESC;`
-	var tasks []models.Task
-	rows, err := db.Query(SQL)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var task models.Task
-
-		err = rows.Scan(&task.ID, &task.Title, &task.Description, &task.Completed, &task.CreatedAt, &task.DueDate)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
-	}
-	return tasks, nil
-}
-func CompletedTasks(db sqlx.Ext) ([]models.Task, error) {
-	SQL := `SELECT * FROM todo WHERE completed = true;`
-	var tasks []models.Task
-	rows, err := db.Query(SQL)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var task models.Task
-
-		err = rows.Scan(&task.ID, &task.Title, &task.Description, &task.Completed, &task.CreatedAt, &task.DueDate)
-		if err != nil {
-			return nil, err
-		}
-		tasks = append(tasks, task)
-	}
-	return tasks, nil
-}
-func GetTaskById(db sqlx.Ext, id string) (models.Task, error) {
-	SQL := `SELECT * FROM tasks WHERE completed = true;`
-	rows, err := db.Query(SQL, id)
-	if err != nil {
-		return models.Task{}, err
-	}
-	var task models.Task
-	rows.Scan(&task.ID, &task.Title, &task.Description, &task.Completed)
-	return task, nil
-}
-func UpdateTask(db sqlx.Ext, id string) {
-	SQL := `UPDATE todo SET Completed = true WHERE ID = $1`
-	_, err := db.Query(SQL, id)
-	if err != nil {
-		return
-	}
+func DeleteSessionToken(userID, token string) error {
+	// language=SQL
+	SQL := `DELETE FROM user_session WHERE user_id = $1 AND session_token = $2`
+	_, err := database.Todo.Exec(SQL, userID, token)
+	return err
 }

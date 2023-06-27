@@ -2,6 +2,7 @@ package server
 
 import (
 	"aytodo/handler"
+	"aytodo/middleware"
 	"net/http"
 	"time"
 )
@@ -26,7 +27,7 @@ func check() http.HandlerFunc {
 func SetupRoutes() {
 	// Setup the routes
 	http.HandleFunc("/", check())
-	http.HandleFunc("/tasks", handler.AllTasks())
+	http.HandleFunc("/tasks", middleware.AuthMiddleware(handler.AllTasks()))
 
 	http.HandleFunc("/tasks/ordered", handler.OrderedTasks())
 	http.HandleFunc("/tasks/ordered/due", handler.OrderedTasksDue())
